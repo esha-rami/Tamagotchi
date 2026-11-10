@@ -1,0 +1,334 @@
+#include <Adafruit_GFX.h>
+
+// ===== DISPLAY TYPE: 1 = SH1106 (1.3"), 0 = SSD1306 (0.96") =====
+#define USE_SH1106 1
+#define OLED_ADDRESS 0x3C   // try 0x3D if the screen stays blank
+
+#if USE_SH1106
+  #include <Adafruit_SH110X.h>
+  #define COLOR SH110X_WHITE
+#else
+  #include <Adafruit_SSD1306.h>
+  #define COLOR SSD1306_WHITE
+#endif
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+
+#define LEFT 11
+#define SELECT 12
+#define RIGHT 10
+
+#if USE_SH1106
+  Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+#else
+  Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+#endif
+
+// ---------- Game state ----------
+enum Screen { WELCOME, PET };
+Screen screenState = WELCOME;
+
+// ---------- Pet stats (0 - 10) ----------
+int happiness = 7;
+int hunger = 7;   // 10 = full, 0 = starving
+int energy = 7;
+bool sleeping = false;
+
+// ---------- Menu ----------
+const char* menuItems[] = {"Eat", "Play", "Sleep", "Stats"};
+const int MENU_COUNT = 4;
+int menuIndex = 0;
+bool showingStats = false;
+
+// ---------- Timing ----------
+unsigned long lastTick = 0;
+const unsigned long TICK_MS = 15000;  // stats change every 15 seconds
+unsigned long lastFrame = 0;
+bool bobUp = false;
+
+bool pressed = false;
+
+void setup() {
+  Serial.begin(9600);
+
+#if USE_SH1106
+  bool ok = display.begin(OLED_ADDRESS, true);
+#else
+  bool ok = display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS);
+#endif
+  if (!ok) {
+    Serial.println("I2C ERROR");
+    while (true);
+  }
+
+  pinMode(LEFT, INPUT_PULLUP);
+  pinMode(SELECT, INPUT_PULLUP);
+  pinMode(RIGHT, INPUT_PULLUP);
+
+  drawWelcome();
+}
+
+void loop() {
+  if (screenState == WELCOME) {
+    // Any button starts the game
+    if (anyButton()) {
+      screenState = PET;
+      pressed = true;          // ignore this press until released
+      lastTick = millis();
+      drawScreen();
+    }
+    delay(10);
+    return;
+  }
+
+  updateStats();
+  handleButtons();
+
+  // Redraw every 500 ms (also makes the pet bob up and down)
+  if (millis() - lastFrame >= 500) {
+    lastFrame = millis();
+    bobUp = !bobUp;
+    drawScreen();
+  }
+
+  delay(10);
+}
+
+bool anyButton() {
+  return digitalRead(LEFT) == LOW ||
+         digitalRead(SELECT) == LOW ||
+         digitalRead(RIGHT) == LOW;
+}
+
+// ---------- Welcome screen ----------
+
+void drawWelcome() {
+  display.clearDisplay();
+  display.setTextColor(COLOR);
+
+  display.drawRect(0, 0, 128, 64, COLOR);
+
+  display.setTextSize(1);
+  display.setCursor(34, 8);
+  display.print("Welcome");
+
+  display.setTextSize(3);
+  display.setCursor(30, 22);
+  display.print("Name");
+
+  display.setTextSize(1);
+  display.setCursor(16, 46);
+  display.print("Press any button");
+
+  display.display();
+}
+
+// ---------- Game logic ----------
+
+void updateStats() {
+  if (millis() - lastTick < TICK_MS) return;
+  lastTick = millis();
+
+  if (sleeping) {
+    energy = min(10, energy + 1);
+    if (energy >= 10) sleeping = false;  // wakes up when rested
+  } else {
+    hunger = max(0, hunger - 1);
+    energy = max(0, energy - 1);
+    if (hunger <= 2 || energy <= 2) happiness = max(0, happiness - 1);
+  }
+}
+
+void handleButtons() {
+  bool l = digitalRead(LEFT) == LOW;
+  bool s = digitalRead(SELECT) == LOW;
+  bool r = digitalRead(RIGHT) == LOW;
+
+  if (pressed) {
+    if (!l && !s && !r) pressed = false;  // wait until all released
+    return;
+  }
+
+  if (!l && !s && !r) return;
+  pressed = true;
+
+  // Stats screen: any button goes back
+  if (showingStats) {
+    showingStats = false;
+    return;
+  }
+
+  // While sleeping: SELECT wakes the pet up (a bit grumpy)
+  if (sleeping) {
+    if (s) {
+      sleeping = false;
+      happiness = max(0, happiness - 1);
+    }
+    return;
+  }
+
+  if (l) {
+    menuIndex = (menuIndex + MENU_COUNT - 1) % MENU_COUNT;
+  } else if (r) {
+    menuIndex = (menuIndex + 1) % MENU_COUNT;
+  } else if (s) {
+    doAction(menuIndex);
+  }
+  drawScreen();
+}
+
+void doAction(int index) {
+  if (index == 0) {          // Eat
+    hunger = min(10, hunger + 3);
+    happiness = min(10, happiness + 1);
+    showMessage("Yum!");
+  } else if (index == 1) {   // Play
+    if (energy < 2) {
+      showMessage("Too tired...");
+    } else {
+      happiness = min(10, happiness + 3);
+      energy = max(0, energy - 1);
+      hunger = max(0, hunger - 1);
+      showMessage("Wheee!");
+    }
+  } else if (index == 2) {   // Sleep
+    sleeping = true;
+    showMessage("Good night");
+  } else if (index == 3) {   // Stats
+    showingStats = true;
+  }
+}
+
+// ---------- Drawing ----------
+
+void drawBar(int x, char label, int value) {
+  display.setCursor(x, 4);
+  display.print(label);
+  display.drawRect(x + 8, 3, 27, 8, COLOR);
+  display.fillRect(x + 10, 5, map(value, 0, 10, 0, 23), 4, COLOR);
+}
+
+void drawStatsBars() {
+  display.setTextSize(1);
+  display.setTextColor(COLOR);
+  drawBar(1, 'H', happiness);
+  drawBar(43, 'E', energy);
+  drawBar(85, 'F', hunger);
+}
+
+// ---------- The cat ----------
+void drawPet() {
+  int cx = 64;
+  int cy = 37 + (bobUp ? -1 : 1);
+
+  // Head (wide rounded shape)
+  display.drawRoundRect(cx - 16, cy - 11, 32, 24, 10, COLOR);
+
+  // Ears (outer + inner)
+  display.drawTriangle(cx - 16, cy - 5, cx - 15, cy - 20, cx - 6, cy - 11, COLOR);
+  display.drawTriangle(cx + 16, cy - 5, cx + 15, cy - 20, cx + 6, cy - 11, COLOR);
+  display.fillTriangle(cx - 13, cy - 8, cx - 13, cy - 15, cx - 9, cy - 11, COLOR);
+  display.fillTriangle(cx + 13, cy - 8, cx + 13, cy - 15, cx + 9, cy - 11, COLOR);
+
+  // Whiskers
+  display.drawLine(cx - 12, cy + 3, cx - 24, cy + 1, COLOR);
+  display.drawLine(cx - 12, cy + 6, cx - 24, cy + 8, COLOR);
+  display.drawLine(cx + 12, cy + 3, cx + 24, cy + 1, COLOR);
+  display.drawLine(cx + 12, cy + 6, cx + 24, cy + 8, COLOR);
+
+  // Nose
+  display.fillTriangle(cx - 2, cy + 2, cx + 2, cy + 2, cx, cy + 4, COLOR);
+
+  if (sleeping) {
+    // closed eyes (little curved lines)
+    display.drawLine(cx - 10, cy - 2, cx - 5, cy - 2, COLOR);
+    display.drawLine(cx + 5, cy - 2, cx + 10, cy - 2, COLOR);
+    // calm mouth
+    display.drawLine(cx - 2, cy + 7, cx + 2, cy + 7, COLOR);
+    // Zzz
+    display.setTextSize(1);
+    display.setTextColor(COLOR);
+    display.setCursor(cx + 26, cy - 12);
+    display.print("z");
+    display.setCursor(cx + 32, cy - 20);
+    display.print("Z");
+  } else {
+    // open eyes
+    display.fillCircle(cx - 7, cy - 2, 2, COLOR);
+    display.fillCircle(cx + 7, cy - 2, 2, COLOR);
+
+    if (happiness >= 5) {
+      // happy "w" cat mouth
+      display.drawCircleHelper(cx - 2, cy + 5, 2, 0x4 | 0x8, COLOR);
+      display.drawCircleHelper(cx + 2, cy + 5, 2, 0x4 | 0x8, COLOR);
+    } else if (happiness >= 3) {
+      // neutral
+      display.drawLine(cx - 3, cy + 7, cx + 3, cy + 7, COLOR);
+    } else {
+      // sad (frown)
+      display.drawCircleHelper(cx, cy + 10, 3, 0x1 | 0x2, COLOR);
+    }
+  }
+}
+
+void drawMenu() {
+  display.setTextSize(1);
+  display.setTextColor(COLOR);
+  display.setCursor(2, 55);
+  display.print("<");
+  display.setCursor(120, 55);
+  display.print(">");
+
+  const char* name = sleeping ? "Wake (SELECT)" : menuItems[menuIndex];
+  int w = strlen(name) * 6;
+  display.setCursor((SCREEN_WIDTH - w) / 2, 55);
+  display.print(name);
+}
+
+void drawStatsScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(COLOR);
+  display.setCursor(10, 8);
+  display.print("Happiness: ");
+  display.print(happiness);
+  display.print("/10");
+  display.setCursor(10, 22);
+  display.print("Energy:    ");
+  display.print(energy);
+  display.print("/10");
+  display.setCursor(10, 36);
+  display.print("Food:      ");
+  display.print(hunger);
+  display.print("/10");
+  display.setCursor(10, 52);
+  display.print("(press any button)");
+  display.display();
+}
+
+void drawScreen() {
+  if (showingStats) {
+    drawStatsScreen();
+    return;
+  }
+  display.clearDisplay();
+  drawStatsBars();
+  display.drawFastHLine(0, 14, 128, COLOR);
+  drawPet();
+  drawMenu();
+  display.display();
+}
+
+void showMessage(const char* text) {
+  display.clearDisplay();
+  drawStatsBars();
+  display.drawFastHLine(0, 14, 128, COLOR);
+  drawPet();
+  display.setTextSize(1);
+  int w = strlen(text) * 6;
+  display.setCursor((SCREEN_WIDTH - w) / 2, 55);
+  display.print(text);
+  display.display();
+  delay(800);
+}
