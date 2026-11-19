@@ -111,15 +111,15 @@ void drawWelcome() {
 
   display.setTextSize(1);
   display.setCursor(34, 8);
-  display.print("Welcome");
+  display.print("");
 
   display.setTextSize(3);
   display.setCursor(30, 22);
-  display.print("Name");
+  display.print("");
 
   display.setTextSize(1);
   display.setCursor(16, 46);
-  display.print("Press any button");
+  display.print("");
 
   display.display();
 }
