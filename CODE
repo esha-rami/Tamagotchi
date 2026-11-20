@@ -109,17 +109,7 @@ void drawWelcome() {
 
   display.drawRect(0, 0, 128, 64, COLOR);
 
-  display.setTextSize(1);
-  display.setCursor(34, 8);
-  display.print("");
-
-  display.setTextSize(3);
-  display.setCursor(30, 22);
-  display.print("");
-
-  display.setTextSize(1);
-  display.setCursor(16, 46);
-  display.print("");
+// ADD CODE HERE 
 
   display.display();
 }
